@@ -22,3 +22,8 @@ ENV/
 # OS
 .DS_Store
 Thumbs.db
+
+# Environment and Database
+.env
+*.db
+chatlist.db

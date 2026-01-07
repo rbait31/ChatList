@@ -25,6 +25,5 @@ Thumbs.db
 
 # Environment and Database
 .env
-.env.local
 *.db
 chatlist.db

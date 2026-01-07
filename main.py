@@ -163,14 +163,15 @@ class MainWindow(QMainWindow):
         
         # Таблица результатов
         self.results_table = QTableWidget()
-        self.results_table.setColumnCount(3)
-        self.results_table.setHorizontalHeaderLabels(["Выбрано", "Модель", "Ответ"])
+        self.results_table.setColumnCount(4)
+        self.results_table.setHorizontalHeaderLabels(["Выбрано", "Модель", "Ответ", "Действия"])
         
         # Настройка колонок
         header = self.results_table.horizontalHeader()
         header.setSectionResizeMode(0, QHeaderView.ResizeToContents)  # Чекбокс
         header.setSectionResizeMode(1, QHeaderView.ResizeToContents)  # Модель
         header.setSectionResizeMode(2, QHeaderView.Stretch)  # Ответ
+        header.setSectionResizeMode(3, QHeaderView.ResizeToContents)  # Действия
         
         self.results_table.setAlternatingRowColors(True)
         self.results_table.setSelectionBehavior(QTableWidget.SelectRows)
@@ -380,6 +381,14 @@ class MainWindow(QMainWindow):
             response_item.setData(Qt.UserRole + 1, response_text)
             self.results_table.setItem(row, 2, response_item)
             
+            # Кнопка "Открыть" для просмотра в Markdown
+            open_button = QPushButton("Открыть")
+            open_button.setMaximumWidth(80)
+            open_button.clicked.connect(
+                lambda checked, r=row: self.open_markdown_viewer(r)
+            )
+            self.results_table.setCellWidget(row, 3, open_button)
+            
             # Автоматически рассчитываем высоту строки на основе длины текста
             # Базовое значение: примерно 20 пикселей на строку текста
             lines_count = len(response_text.split('\n'))
@@ -497,6 +506,149 @@ class MainWindow(QMainWindow):
         """Открыть диалог просмотра сохраненных результатов."""
         dialog = ViewResultsDialog(self.db, self)
         dialog.exec_()
+    
+    def open_markdown_viewer(self, row: int):
+        """Открыть ответ нейросети в форматированном Markdown."""
+        if row >= len(self.temp_results):
+            return
+        
+        result = self.temp_results[row]
+        
+        # Получаем текст ответа
+        if result.get('success', False):
+            markdown_text = result.get('response', '')
+        else:
+            error_text = result.get('error', 'Неизвестная ошибка')
+            markdown_text = f"## Ошибка\n\n{error_text}"
+        
+        # Получаем название модели
+        model_name = result.get('model_name', 'Unknown')
+        
+        # Конвертируем Markdown в HTML
+        try:
+            import markdown
+            html_content = markdown.markdown(
+                markdown_text,
+                extensions=['extra', 'codehilite', 'nl2br', 'sane_lists']
+            )
+        except ImportError:
+            # Если markdown не установлен, используем простой HTML
+            html_content = markdown_text.replace('\n', '<br>')
+            QMessageBox.warning(
+                self,
+                "Предупреждение",
+                "Библиотека markdown не установлена. Установите её командой:\npip install markdown"
+            )
+        except Exception as e:
+            # Если ошибка конвертации, показываем как обычный текст
+            html_content = f"<pre>{markdown_text}</pre>"
+            self.logger.warning(f"Ошибка конвертации Markdown: {str(e)}")
+        
+        # Создаем диалог для отображения Markdown
+        dialog = QDialog(self)
+        dialog.setWindowTitle(f"Ответ модели: {model_name}")
+        dialog.setMinimumSize(900, 700)
+        
+        layout = QVBoxLayout()
+        dialog.setLayout(layout)
+        
+        # Метка с информацией
+        info_label = QLabel(f"Ответ модели: {model_name}")
+        info_label.setFont(QFont("Arial", 10, QFont.Bold))
+        layout.addWidget(info_label)
+        
+        # Текстовое поле с форматированным Markdown
+        text_edit = QTextEdit()
+        text_edit.setReadOnly(True)
+        # Устанавливаем HTML контент
+        text_edit.setHtml(f"""
+        <html>
+        <head>
+            <style>
+                body {{
+                    font-family: 'Segoe UI', Arial, sans-serif;
+                    font-size: 11pt;
+                    line-height: 1.6;
+                    padding: 10px;
+                }}
+                h1, h2, h3, h4, h5, h6 {{
+                    color: #2c3e50;
+                    margin-top: 20px;
+                    margin-bottom: 10px;
+                }}
+                code {{
+                    background-color: #f4f4f4;
+                    padding: 2px 5px;
+                    border-radius: 3px;
+                    font-family: 'Consolas', 'Courier New', monospace;
+                }}
+                pre {{
+                    background-color: #f4f4f4;
+                    padding: 10px;
+                    border-radius: 5px;
+                    overflow-x: auto;
+                }}
+                pre code {{
+                    background-color: transparent;
+                    padding: 0;
+                }}
+                ul, ol {{
+                    margin-left: 20px;
+                }}
+                blockquote {{
+                    border-left: 4px solid #ddd;
+                    margin-left: 0;
+                    padding-left: 20px;
+                    color: #666;
+                }}
+                table {{
+                    border-collapse: collapse;
+                    width: 100%;
+                    margin: 10px 0;
+                }}
+                table th, table td {{
+                    border: 1px solid #ddd;
+                    padding: 8px;
+                    text-align: left;
+                }}
+                table th {{
+                    background-color: #f2f2f2;
+                    font-weight: bold;
+                }}
+            </style>
+        </head>
+        <body>
+            {html_content}
+        </body>
+        </html>
+        """)
+        layout.addWidget(text_edit)
+        
+        # Кнопки управления
+        button_layout = QHBoxLayout()
+        
+        # Кнопка копирования
+        copy_button = QPushButton("Копировать текст")
+        copy_button.clicked.connect(lambda: self.copy_to_clipboard(markdown_text, text_edit))
+        button_layout.addWidget(copy_button)
+        
+        button_layout.addStretch()
+        
+        # Кнопка закрытия
+        close_button = QPushButton("Закрыть")
+        close_button.clicked.connect(dialog.accept)
+        button_layout.addWidget(close_button)
+        
+        layout.addLayout(button_layout)
+        
+        dialog.exec_()
+    
+    def copy_to_clipboard(self, text: str, text_edit: QTextEdit):
+        """Копировать текст в буфер обмена."""
+        from PyQt5.QtWidgets import QApplication
+        clipboard = QApplication.clipboard()
+        clipboard.setText(text)
+        QMessageBox.information(self, "Успех", "Текст скопирован в буфер обмена!")
     
     def view_full_response_main(self, item):
         """Просмотр полного текста ответа в отдельном окне (из главной таблицы)."""

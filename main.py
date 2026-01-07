@@ -3,19 +3,23 @@
 Реализует интерфейс для отправки промтов в нейросети и сравнения ответов.
 """
 import sys
+import logging
+import traceback
 from datetime import datetime
 from typing import List, Dict, Optional
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QTextEdit, QLineEdit, QComboBox, QTableWidget,
     QTableWidgetItem, QCheckBox, QLabel, QMessageBox, QHeaderView,
-    QSplitter
+    QSplitter, QMenuBar, QMenu, QFileDialog, QDialog
 )
 from PyQt5.QtCore import Qt, QThread, pyqtSignal
 from PyQt5.QtGui import QFont
 
 from db import Database
 from models import ModelManager
+from model_settings_dialog import ModelSettingsDialog
+from view_results_dialog import ViewResultsDialog
 
 
 class RequestThread(QThread):
@@ -46,12 +50,24 @@ class MainWindow(QMainWindow):
     
     def __init__(self):
         super().__init__()
+        self.logger = logging.getLogger(__name__)
         self.setWindowTitle("ChatList - Сравнение ответов нейросетей")
         self.setGeometry(100, 100, 1400, 900)
         
-        # Инициализация БД и менеджера моделей
-        self.db = Database()
-        self.model_manager = ModelManager(self.db)
+        try:
+            # Инициализация БД и менеджера моделей
+            self.db = Database()
+            self.model_manager = ModelManager(self.db)
+            self.logger.info("Инициализация приложения завершена успешно")
+        except Exception as e:
+            self.logger.error(f"Ошибка при инициализации: {str(e)}\n{traceback.format_exc()}")
+            QMessageBox.critical(
+                None,
+                "Ошибка инициализации",
+                f"Не удалось инициализировать приложение:\n{str(e)}\n\n"
+                f"Проверьте файл chatlist.log для подробностей."
+            )
+            raise
         
         # Временное хранилище результатов (в памяти)
         self.temp_results: List[Dict] = []
@@ -65,6 +81,9 @@ class MainWindow(QMainWindow):
     
     def init_ui(self):
         """Инициализация интерфейса."""
+        # Создаем меню
+        self.create_menu()
+        
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
         main_layout = QVBoxLayout()
@@ -92,6 +111,16 @@ class MainWindow(QMainWindow):
         
         # Строка с тегами и выбором сохраненного промта
         prompt_controls = QHBoxLayout()
+        
+        # Поиск по промтам
+        search_label = QLabel("Поиск:")
+        prompt_controls.addWidget(search_label)
+        
+        self.search_input = QLineEdit()
+        self.search_input.setPlaceholderText("Поиск по тексту...")
+        self.search_input.setMinimumWidth(150)
+        self.search_input.textChanged.connect(self.on_search_changed)
+        prompt_controls.addWidget(self.search_input)
         
         # Выбор сохраненного промта
         saved_prompt_label = QLabel("Сохраненный промт:")
@@ -145,6 +174,10 @@ class MainWindow(QMainWindow):
         
         self.results_table.setAlternatingRowColors(True)
         self.results_table.setSelectionBehavior(QTableWidget.SelectRows)
+        self.results_table.setSortingEnabled(True)  # Включаем сортировку
+        self.results_table.setWordWrap(True)  # Включаем перенос текста
+        # Обработчик двойного клика для просмотра полного текста
+        self.results_table.itemDoubleClicked.connect(self.view_full_response_main)
         results_layout.addWidget(self.results_table)
         
         splitter.addWidget(results_panel)
@@ -164,6 +197,18 @@ class MainWindow(QMainWindow):
         self.save_button.clicked.connect(self.save_selected_results)
         self.save_button.setEnabled(False)
         control_layout.addWidget(self.save_button)
+        
+        # Кнопка просмотра результатов
+        view_results_button = QPushButton("Просмотр результатов")
+        view_results_button.setMinimumHeight(35)
+        view_results_button.clicked.connect(self.view_saved_results)
+        control_layout.addWidget(view_results_button)
+        
+        # Кнопка экспорта
+        export_button = QPushButton("Экспорт")
+        export_button.setMinimumHeight(35)
+        export_button.clicked.connect(self.export_results)
+        control_layout.addWidget(export_button)
         
         # Кнопка очистки
         clear_button = QPushButton("Очистить результаты")
@@ -216,21 +261,41 @@ class MainWindow(QMainWindow):
             return
         
         # Проверяем наличие активных моделей
-        active_models = self.model_manager.get_active_models()
-        if not active_models:
-            QMessageBox.warning(
-                self, 
-                "Ошибка", 
-                "Нет активных моделей! Добавьте модели в настройках."
-            )
+        try:
+            active_models = self.model_manager.get_active_models()
+            if not active_models:
+                error_msg = (
+                    "Нет активных моделей!\n\n"
+                    "Добавьте модели через меню:\n"
+                    "Настройки → Управление моделями\n\n"
+                    "Убедитесь, что:\n"
+                    "1. Модель добавлена в базу данных\n"
+                    "2. У модели установлен флаг 'Активна'\n"
+                    "3. В файле .env указан правильный API-ключ"
+                )
+                self.logger.warning("Попытка отправить запрос без активных моделей")
+                QMessageBox.warning(self, "Ошибка", error_msg)
+                return
+        except Exception as e:
+            error_msg = f"Ошибка при получении списка моделей: {str(e)}"
+            self.logger.error(error_msg)
+            QMessageBox.critical(self, "Ошибка", error_msg)
             return
         
         # Очищаем предыдущие результаты
         self.clear_results()
         
         # Сохраняем промт в БД (если новый)
-        tags = self.tags_input.text().strip() or None
-        self.current_prompt_id = self.db.create_prompt(prompt_text, tags)
+        try:
+            tags = self.tags_input.text().strip() or None
+            self.current_prompt_id = self.db.create_prompt(prompt_text, tags)
+        except Exception as e:
+            QMessageBox.warning(
+                self,
+                "Ошибка БД",
+                f"Не удалось сохранить промт в БД: {str(e)}\nПродолжаем без сохранения..."
+            )
+            self.current_prompt_id = None
         
         # Обновляем статус
         self.status_label.setText(f"Отправка запроса в {len(active_models)} моделей...")
@@ -249,11 +314,40 @@ class MainWindow(QMainWindow):
         # Подсчитываем успешные запросы
         successful = sum(1 for r in results if r.get('success', False))
         total = len(results)
+        failed = total - successful
         
-        self.status_label.setText(
-            f"Готово: {successful} из {total} запросов успешны"
-        )
+        status_text = f"Готово: {successful} из {total} запросов успешны"
+        if failed > 0:
+            status_text += f" ({failed} ошибок)"
+        
+        self.status_label.setText(status_text)
         self.save_button.setEnabled(True)
+        
+        # Показываем предупреждение, если все запросы неудачны
+        if successful == 0 and total > 0:
+            # Собираем все ошибки для подробного сообщения
+            errors = []
+            for r in results:
+                if r.get('error'):
+                    model_name = r.get('model_name', 'Unknown')
+                    error = r.get('error', 'Неизвестная ошибка')
+                    errors.append(f"• {model_name}: {error}")
+            
+            error_details = "\n".join(errors[:5])  # Показываем первые 5 ошибок
+            if len(errors) > 5:
+                error_details += f"\n... и еще {len(errors) - 5} ошибок"
+            
+            error_msg = (
+                "Все запросы завершились с ошибками!\n\n"
+                "Детали ошибок:\n" + error_details + "\n\n"
+                "Проверьте:\n"
+                "1. Правильность API-ключей в файле .env\n"
+                "2. Наличие интернет-соединения\n"
+                "3. Доступность выбранных моделей\n"
+                "4. Настройки моделей (API URL, имя переменной окружения)"
+            )
+            self.logger.error(f"Все запросы завершились с ошибками: {errors}")
+            QMessageBox.warning(self, "Внимание", error_msg)
     
     def update_results_table(self):
         """Обновить таблицу результатов."""
@@ -282,10 +376,26 @@ class MainWindow(QMainWindow):
             response_item.setFlags(response_item.flags() & ~Qt.ItemIsEditable)
             # Перенос текста
             response_item.setTextAlignment(Qt.AlignTop | Qt.AlignLeft)
+            # Сохраняем полный текст для просмотра
+            response_item.setData(Qt.UserRole + 1, response_text)
             self.results_table.setItem(row, 2, response_item)
             
-            # Устанавливаем высоту строки
-            self.results_table.setRowHeight(row, 100)
+            # Автоматически рассчитываем высоту строки на основе длины текста
+            # Базовое значение: примерно 20 пикселей на строку текста
+            lines_count = len(response_text.split('\n'))
+            # Если одна строка, считаем примерное количество строк с учетом переноса
+            if lines_count == 1:
+                # Примерно 60 символов на строку в ячейке
+                estimated_lines = max(1, len(response_text) // 60)
+            else:
+                estimated_lines = lines_count
+            
+            # Минимальная высота 60, максимальная 400 пикселей
+            row_height = min(max(60, estimated_lines * 25 + 20), 400)
+            self.results_table.setRowHeight(row, row_height)
+            
+            # Добавляем подсказку
+            response_item.setToolTip("Двойной клик для просмотра полного текста")
         
         # Автоматически подгоняем ширину колонки модели
         self.results_table.resizeColumnToContents(1)
@@ -348,29 +458,250 @@ class MainWindow(QMainWindow):
         self.saved_prompts_combo.setCurrentIndex(0)
         self.status_label.setText("Готов к работе")
     
+    def create_menu(self):
+        """Создать меню приложения."""
+        menubar = self.menuBar()
+        
+        # Меню "Настройки"
+        settings_menu = menubar.addMenu("Настройки")
+        
+        model_settings_action = settings_menu.addAction("Управление моделями")
+        model_settings_action.triggered.connect(self.open_model_settings)
+        
+        # Меню "Данные"
+        data_menu = menubar.addMenu("Данные")
+        
+        view_results_action = data_menu.addAction("Просмотр сохраненных результатов")
+        view_results_action.triggered.connect(self.view_saved_results)
+        
+        # Меню "Файл"
+        file_menu = menubar.addMenu("Файл")
+        
+        export_action = file_menu.addAction("Экспорт результатов")
+        export_action.triggered.connect(self.export_results)
+        
+        file_menu.addSeparator()
+        
+        exit_action = file_menu.addAction("Выход")
+        exit_action.triggered.connect(self.close)
+    
+    def open_model_settings(self):
+        """Открыть диалог управления моделями."""
+        dialog = ModelSettingsDialog(self.db, self)
+        if dialog.exec_() == QDialog.Accepted:
+            # Обновляем менеджер моделей после изменений
+            self.model_manager.refresh_clients()
+            QMessageBox.information(self, "Успех", "Настройки моделей обновлены!")
+    
+    def view_saved_results(self):
+        """Открыть диалог просмотра сохраненных результатов."""
+        dialog = ViewResultsDialog(self.db, self)
+        dialog.exec_()
+    
+    def view_full_response_main(self, item):
+        """Просмотр полного текста ответа в отдельном окне (из главной таблицы)."""
+        # Проверяем, что клик был по колонке "Ответ" (индекс 2)
+        if item.column() == 2:
+            full_text = item.data(Qt.UserRole + 1) or item.text()
+            
+            # Получаем название модели из той же строки
+            model_item = self.results_table.item(item.row(), 1)
+            model_name = model_item.text() if model_item else "Unknown"
+            
+            # Создаем диалог для отображения полного текста
+            dialog = QDialog(self)
+            dialog.setWindowTitle(f"Полный текст ответа - {model_name}")
+            dialog.setMinimumSize(800, 600)
+            
+            layout = QVBoxLayout()
+            dialog.setLayout(layout)
+            
+            # Метка с информацией
+            info_label = QLabel(f"Ответ модели: {model_name}")
+            info_label.setFont(QFont("Arial", 10, QFont.Bold))
+            layout.addWidget(info_label)
+            
+            # Текстовое поле с полным ответом
+            text_edit = QTextEdit()
+            text_edit.setReadOnly(True)
+            text_edit.setPlainText(full_text)
+            text_edit.setFont(QFont("Consolas", 10))  # Моноширинный шрифт для читаемости
+            layout.addWidget(text_edit)
+            
+            # Кнопка закрытия
+            button_layout = QHBoxLayout()
+            button_layout.addStretch()
+            close_button = QPushButton("Закрыть")
+            close_button.clicked.connect(dialog.accept)
+            button_layout.addWidget(close_button)
+            layout.addLayout(button_layout)
+            
+            dialog.exec_()
+    
+    def on_search_changed(self, text: str):
+        """Обработчик изменения текста поиска."""
+        search_text = text.strip()
+        if search_text:
+            prompts = self.db.get_prompts(search=search_text)
+        else:
+            prompts = self.db.get_prompts()
+        
+        # Обновляем ComboBox
+        self.saved_prompts_combo.clear()
+        self.saved_prompts_combo.addItem("-- Выберите промт --", None)
+        
+        for prompt in prompts:
+            date_str = prompt['date'][:10] if prompt['date'] else ""
+            tags_str = f" [{prompt['tags']}]" if prompt['tags'] else ""
+            display_text = f"{date_str}{tags_str}: {prompt['prompt'][:50]}..."
+            self.saved_prompts_combo.addItem(display_text, prompt['id'])
+    
+    def export_results(self):
+        """Экспортировать результаты в файл."""
+        if not self.temp_results:
+            QMessageBox.warning(self, "Ошибка", "Нет результатов для экспорта!")
+            return
+        
+        # Выбираем формат
+        format_dialog = QMessageBox(self)
+        format_dialog.setWindowTitle("Выбор формата экспорта")
+        format_dialog.setText("Выберите формат экспорта:")
+        md_button = format_dialog.addButton("Markdown", QMessageBox.AcceptRole)
+        json_button = format_dialog.addButton("JSON", QMessageBox.AcceptRole)
+        cancel_button = format_dialog.addButton("Отмена", QMessageBox.RejectRole)
+        format_dialog.exec_()
+        
+        if format_dialog.clickedButton() == cancel_button:
+            return
+        
+        # Выбираем файл для сохранения
+        if format_dialog.clickedButton() == md_button:
+            file_path, _ = QFileDialog.getSaveFileName(
+                self, "Сохранить как Markdown", "", "Markdown Files (*.md);;All Files (*)"
+            )
+            if file_path:
+                self.export_to_markdown(file_path)
+        elif format_dialog.clickedButton() == json_button:
+            file_path, _ = QFileDialog.getSaveFileName(
+                self, "Сохранить как JSON", "", "JSON Files (*.json);;All Files (*)"
+            )
+            if file_path:
+                self.export_to_json(file_path)
+    
+    def export_to_markdown(self, file_path: str):
+        """Экспортировать результаты в Markdown."""
+        try:
+            prompt_text = self.prompt_text.toPlainText()
+            tags = self.tags_input.text()
+            
+            with open(file_path, 'w', encoding='utf-8') as f:
+                f.write("# Результаты сравнения нейросетей\n\n")
+                f.write(f"**Промт:** {prompt_text}\n\n")
+                if tags:
+                    f.write(f"**Теги:** {tags}\n\n")
+                f.write(f"**Дата:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
+                f.write("---\n\n")
+                
+                for i, result in enumerate(self.temp_results, 1):
+                    model_name = result.get('model_name', 'Unknown')
+                    f.write(f"## {i}. {model_name}\n\n")
+                    
+                    if result.get('success', False):
+                        response = result.get('response', '')
+                        f.write(f"{response}\n\n")
+                    else:
+                        error = result.get('error', 'Неизвестная ошибка')
+                        f.write(f"❌ **Ошибка:** {error}\n\n")
+                    
+                    f.write("---\n\n")
+            
+            QMessageBox.information(self, "Успех", f"Результаты экспортированы в {file_path}")
+        except Exception as e:
+            QMessageBox.critical(self, "Ошибка", f"Ошибка при экспорте: {str(e)}")
+    
+    def export_to_json(self, file_path: str):
+        """Экспортировать результаты в JSON."""
+        import json
+        try:
+            prompt_text = self.prompt_text.toPlainText()
+            tags = self.tags_input.text()
+            
+            export_data = {
+                "prompt": prompt_text,
+                "tags": tags,
+                "date": datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                "results": []
+            }
+            
+            for result in self.temp_results:
+                export_data["results"].append({
+                    "model_id": result.get('model_id'),
+                    "model_name": result.get('model_name'),
+                    "success": result.get('success', False),
+                    "response": result.get('response', ''),
+                    "error": result.get('error')
+                })
+            
+            with open(file_path, 'w', encoding='utf-8') as f:
+                json.dump(export_data, f, ensure_ascii=False, indent=2)
+            
+            QMessageBox.information(self, "Успех", f"Результаты экспортированы в {file_path}")
+        except Exception as e:
+            QMessageBox.critical(self, "Ошибка", f"Ошибка при экспорте: {str(e)}")
+    
     def closeEvent(self, event):
         """Обработчик закрытия окна."""
-        # Останавливаем поток запросов, если он запущен
-        if self.request_thread and self.request_thread.isRunning():
-            self.request_thread.terminate()
-            self.request_thread.wait()
-        
-        # Закрываем БД
-        if self.db:
-            self.db.close()
-        
-        event.accept()
+        try:
+            # Останавливаем поток запросов, если он запущен
+            if self.request_thread and self.request_thread.isRunning():
+                self.logger.info("Остановка потока запросов...")
+                self.request_thread.terminate()
+                self.request_thread.wait()
+            
+            # Закрываем БД
+            if self.db:
+                self.db.close()
+                self.logger.info("База данных закрыта")
+            
+            self.logger.info("Приложение закрыто")
+            event.accept()
+        except Exception as e:
+            self.logger.error(f"Ошибка при закрытии приложения: {str(e)}\n{traceback.format_exc()}")
+            event.accept()  # Все равно закрываем
 
 
 def main():
     """Главная функция приложения."""
-    app = QApplication(sys.argv)
-    app.setStyle('Fusion')  # Современный стиль интерфейса
+    # Настройка логирования
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        handlers=[
+            logging.FileHandler('chatlist.log', encoding='utf-8'),
+            logging.StreamHandler(sys.stdout)
+        ]
+    )
+    logger = logging.getLogger(__name__)
     
-    window = MainWindow()
-    window.show()
-    
-    sys.exit(app.exec_())
+    try:
+        app = QApplication(sys.argv)
+        app.setStyle('Fusion')  # Современный стиль интерфейса
+        
+        window = MainWindow()
+        window.show()
+        
+        logger.info("Приложение ChatList запущено успешно")
+        sys.exit(app.exec_())
+    except Exception as e:
+        error_msg = f"Критическая ошибка при запуске приложения: {str(e)}\n{traceback.format_exc()}"
+        logger.critical(error_msg)
+        print(f"\n{'='*60}")
+        print("КРИТИЧЕСКАЯ ОШИБКА!")
+        print(f"{'='*60}")
+        print(error_msg)
+        print(f"{'='*60}\n")
+        input("Нажмите Enter для выхода...")
+        sys.exit(1)
 
 
 if __name__ == "__main__":

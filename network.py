@@ -30,7 +30,15 @@ class APIClient(ABC):
         self.api_key = os.getenv(api_key_env)
         
         if not self.api_key:
-            raise ValueError(f"API ключ не найден в переменной окружения: {api_key_env}")
+            error_msg = (
+                f"API ключ не найден в переменной окружения '{api_key_env}'.\n\n"
+                f"Проверьте:\n"
+                f"1. Файл .env существует в корне проекта\n"
+                f"2. В файле .env есть строка: {api_key_env}=ваш_ключ\n"
+                f"3. Ключ не является заглушкой (например, 'sk-your-api-key-here')\n"
+                f"4. Нет лишних пробелов или кавычек вокруг значения"
+            )
+            raise ValueError(error_msg)
     
     @abstractmethod
     def send_request(self, prompt: str) -> str:
@@ -233,6 +241,60 @@ class GroqClient(APIClient):
             raise Exception("Неожиданный формат ответа от Groq API")
 
 
+class OpenRouterClient(APIClient):
+    """Клиент для работы с OpenRouter API."""
+    
+    def __init__(self, api_key_env: str = "OPENROUTER_API_KEY",
+                 model: str = "openai/gpt-3.5-turbo", timeout: int = 30):
+        """
+        Инициализация OpenRouter клиента.
+        
+        Args:
+            api_key_env: Имя переменной окружения с API-ключом
+            model: Название модели (формат: provider/model-name)
+            timeout: Таймаут запроса
+        """
+        super().__init__(
+            api_url="https://openrouter.ai/api/v1/chat/completions",
+            api_key_env=api_key_env,
+            timeout=timeout
+        )
+        self.model = model
+    
+    def send_request(self, prompt: str) -> str:
+        """
+        Отправить запрос к OpenRouter API.
+        
+        Args:
+            prompt: Текст промта
+            
+        Returns:
+            Текст ответа от модели
+        """
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+            "HTTP-Referer": "https://github.com/rbait31/ChatList",  # Опционально, для статистики
+            "X-Title": "ChatList"  # Опционально, для статистики
+        }
+        
+        data = {
+            "model": self.model,
+            "messages": [
+                {"role": "user", "content": prompt}
+            ],
+            "temperature": 0.7
+        }
+        
+        response = self._make_request("POST", headers=headers, json=data)
+        result = response.json()
+        
+        if "choices" in result and len(result["choices"]) > 0:
+            return result["choices"][0]["message"]["content"]
+        else:
+            raise Exception("Неожиданный формат ответа от OpenRouter API")
+
+
 def create_api_client(model_name: str, api_url: str, api_key_env: str) -> APIClient:
     """
     Фабричная функция для создания API-клиента по типу модели.
@@ -248,7 +310,9 @@ def create_api_client(model_name: str, api_url: str, api_key_env: str) -> APICli
     # Определяем тип клиента по URL или названию модели
     model_lower = model_name.lower()
     
-    if "openai" in api_url.lower() or "openai" in model_lower:
+    if "openrouter" in api_url.lower() or "openrouter" in model_lower:
+        return OpenRouterClient(api_key_env=api_key_env)
+    elif "openai" in api_url.lower() or "openai" in model_lower:
         return OpenAIClient(api_key_env=api_key_env)
     elif "deepseek" in api_url.lower() or "deepseek" in model_lower:
         return DeepSeekClient(api_key_env=api_key_env)
@@ -257,5 +321,5 @@ def create_api_client(model_name: str, api_url: str, api_key_env: str) -> APICli
     else:
         # Для неизвестных типов создаем базовый клиент
         # В этом случае нужно будет переопределить send_request
-        raise ValueError(f"Неизвестный тип модели: {model_name}. Используйте один из: OpenAI, DeepSeek, Groq")
+        raise ValueError(f"Неизвестный тип модели: {model_name}. Используйте один из: OpenRouter, OpenAI, DeepSeek, Groq")
 

@@ -20,6 +20,7 @@ from db import Database
 from models import ModelManager
 from model_settings_dialog import ModelSettingsDialog
 from view_results_dialog import ViewResultsDialog
+from prompts_dialog import PromptsDialog
 
 
 class RequestThread(QThread):
@@ -480,6 +481,9 @@ class MainWindow(QMainWindow):
         # Меню "Данные"
         data_menu = menubar.addMenu("Данные")
         
+        view_prompts_action = data_menu.addAction("Управление промтами")
+        view_prompts_action.triggered.connect(self.view_prompts)
+        
         view_results_action = data_menu.addAction("Просмотр сохраненных результатов")
         view_results_action.triggered.connect(self.view_saved_results)
         
@@ -501,6 +505,13 @@ class MainWindow(QMainWindow):
             # Обновляем менеджер моделей после изменений
             self.model_manager.refresh_clients()
             QMessageBox.information(self, "Успех", "Настройки моделей обновлены!")
+    
+    def view_prompts(self):
+        """Открыть диалог управления промтами."""
+        dialog = PromptsDialog(self.db, self)
+        if dialog.exec_() == QDialog.Accepted:
+            # Обновляем список промтов в ComboBox
+            self.load_saved_prompts()
     
     def view_saved_results(self):
         """Открыть диалог просмотра сохраненных результатов."""

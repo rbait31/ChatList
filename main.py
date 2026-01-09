@@ -14,13 +14,17 @@ from PyQt5.QtWidgets import (
     QSplitter, QMenuBar, QMenu, QFileDialog, QDialog
 )
 from PyQt5.QtCore import Qt, QThread, pyqtSignal
-from PyQt5.QtGui import QFont
+from PyQt5.QtGui import QFont, QIcon
 
 from db import Database
 from models import ModelManager
 from model_settings_dialog import ModelSettingsDialog
 from view_results_dialog import ViewResultsDialog
 from prompts_dialog import PromptsDialog
+from prompt_improver import PromptImprover
+from prompt_improver_dialog import PromptImproverDialog
+from settings_dialog import SettingsDialog
+from about_dialog import AboutDialog
 
 
 class RequestThread(QThread):
@@ -55,10 +59,22 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("ChatList - Сравнение ответов нейросетей")
         self.setGeometry(100, 100, 1400, 900)
         
+        # Устанавливаем иконку приложения
+        try:
+            icon = QIcon("app.ico")
+            if not icon.isNull():
+                self.setWindowIcon(icon)
+                self.logger.info("Иконка приложения загружена успешно")
+            else:
+                self.logger.warning("Не удалось загрузить иконку app.ico")
+        except Exception as e:
+            self.logger.warning(f"Ошибка при загрузке иконки: {str(e)}")
+        
         try:
             # Инициализация БД и менеджера моделей
             self.db = Database()
             self.model_manager = ModelManager(self.db)
+            self.prompt_improver = PromptImprover(self.model_manager)
             self.logger.info("Инициализация приложения завершена успешно")
         except Exception as e:
             self.logger.error(f"Ошибка при инициализации: {str(e)}\n{traceback.format_exc()}")
@@ -79,6 +95,9 @@ class MainWindow(QMainWindow):
         
         self.init_ui()
         self.load_saved_prompts()
+        
+        # Применяем сохраненные настройки после создания UI
+        self.apply_settings()
     
     def init_ui(self):
         """Инициализация интерфейса."""
@@ -145,11 +164,24 @@ class MainWindow(QMainWindow):
         
         prompt_layout.addLayout(prompt_controls)
         
+        # Кнопки управления промтом
+        prompt_buttons_layout = QHBoxLayout()
+        
+        # Кнопка улучшения промта
+        improve_button = QPushButton("✨ Улучшить промт")
+        improve_button.setMinimumHeight(35)
+        improve_button.clicked.connect(self.improve_prompt)
+        prompt_buttons_layout.addWidget(improve_button)
+        
+        prompt_buttons_layout.addStretch()
+        
         # Кнопка отправки
         send_button = QPushButton("Отправить запрос")
         send_button.setMinimumHeight(35)
         send_button.clicked.connect(self.send_prompt)
-        prompt_layout.addWidget(send_button)
+        prompt_buttons_layout.addWidget(send_button)
+        
+        prompt_layout.addLayout(prompt_buttons_layout)
         
         splitter.addWidget(prompt_panel)
         
@@ -253,6 +285,52 @@ class MainWindow(QMainWindow):
             if prompt:
                 self.prompt_text.setPlainText(prompt['prompt'])
                 self.tags_input.setText(prompt['tags'] or "")
+    
+    def improve_prompt(self):
+        """Открыть диалог улучшения промта."""
+        current_prompt = self.prompt_text.toPlainText().strip()
+        
+        if not current_prompt:
+            reply = QMessageBox.question(
+                self,
+                "Пустой промт",
+                "Поле промта пусто. Хотите создать новый промт с помощью AI-ассистента?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No
+            )
+            if reply == QMessageBox.No:
+                return
+            current_prompt = "Создай промт для..."  # Базовый промт для создания
+        
+        # Проверяем наличие активных моделей
+        active_models = self.model_manager.get_active_models()
+        if not active_models:
+            QMessageBox.warning(
+                self,
+                "Ошибка",
+                "Нет активных моделей для улучшения промта!\n"
+                "Добавьте модели через меню 'Настройки' → 'Управление моделями'."
+            )
+            return
+        
+        try:
+            dialog = PromptImproverDialog(self.prompt_improver, current_prompt, self)
+            if dialog.exec_() == QDialog.Accepted:
+                improved_prompt = dialog.get_selected_prompt()
+                if improved_prompt:
+                    self.prompt_text.setPlainText(improved_prompt)
+                    QMessageBox.information(
+                        self,
+                        "Успех",
+                        "Улучшенный промт подставлен в поле ввода!"
+                    )
+        except Exception as e:
+            self.logger.error(f"Ошибка при открытии диалога улучшения: {str(e)}")
+            QMessageBox.critical(
+                self,
+                "Ошибка",
+                f"Не удалось открыть диалог улучшения промта:\n{str(e)}"
+            )
     
     def send_prompt(self):
         """Отправить промт во все активные модели."""
@@ -478,6 +556,11 @@ class MainWindow(QMainWindow):
         model_settings_action = settings_menu.addAction("Управление моделями")
         model_settings_action.triggered.connect(self.open_model_settings)
         
+        settings_menu.addSeparator()
+        
+        app_settings_action = settings_menu.addAction("Настройки приложения")
+        app_settings_action.triggered.connect(self.open_app_settings)
+        
         # Меню "Данные"
         data_menu = menubar.addMenu("Данные")
         
@@ -497,6 +580,12 @@ class MainWindow(QMainWindow):
         
         exit_action = file_menu.addAction("Выход")
         exit_action.triggered.connect(self.close)
+        
+        # Меню "Справка"
+        help_menu = menubar.addMenu("Справка")
+        
+        about_action = help_menu.addAction("О программе")
+        about_action.triggered.connect(self.show_about)
     
     def open_model_settings(self):
         """Открыть диалог управления моделями."""
@@ -517,6 +606,196 @@ class MainWindow(QMainWindow):
         """Открыть диалог просмотра сохраненных результатов."""
         dialog = ViewResultsDialog(self.db, self)
         dialog.exec_()
+    
+    def open_app_settings(self):
+        """Открыть диалог настроек приложения."""
+        dialog = SettingsDialog(self.db, self)
+        if dialog.exec_() == QDialog.Accepted:
+            # Применяем новые настройки
+            self.apply_settings()
+            QMessageBox.information(
+                self,
+                "Успех",
+                "Настройки применены!\n\n"
+                "Некоторые изменения вступят в силу после перезапуска приложения."
+            )
+    
+    def show_about(self):
+        """Показать диалог 'О программе'."""
+        dialog = AboutDialog(self)
+        dialog.exec_()
+    
+    def apply_settings(self):
+        """Применить настройки темы и размера шрифта."""
+        try:
+            # Загружаем тему
+            theme = self.db.get_setting("theme", "light")
+            
+            # Применяем тему
+            if theme == "dark":
+                self.apply_dark_theme()
+            elif theme == "light":
+                self.apply_light_theme()
+            else:  # По умолчанию светлая
+                self.apply_light_theme()
+            
+            # Загружаем и применяем размер шрифта
+            font_size_str = self.db.get_setting("font_size", "10")
+            try:
+                font_size = int(font_size_str)
+                if 8 <= font_size <= 20:  # Ограничение согласно диалогу настроек
+                    self.apply_font_size(font_size)
+                else:
+                    self.apply_font_size(10)  # По умолчанию, если вне диапазона
+            except (ValueError, TypeError):
+                self.apply_font_size(10)  # По умолчанию
+                
+            self.logger.info(f"Настройки применены: theme={theme}, font_size={font_size_str}")
+        except Exception as e:
+            self.logger.error(f"Ошибка при применении настроек: {str(e)}\n{traceback.format_exc()}")
+            # Применяем настройки по умолчанию при ошибке
+            try:
+                self.apply_light_theme()
+                self.apply_font_size(10)
+            except:
+                pass
+    
+    def apply_dark_theme(self):
+        """Применить темную тему."""
+        dark_stylesheet = """
+        QMainWindow {
+            background-color: #2b2b2b;
+            color: #ffffff;
+        }
+        QWidget {
+            background-color: #2b2b2b;
+            color: #ffffff;
+        }
+        QTextEdit, QLineEdit, QComboBox {
+            background-color: #3c3c3c;
+            color: #ffffff;
+            border: 1px solid #555555;
+            padding: 5px;
+        }
+        QComboBox::drop-down {
+            border: none;
+        }
+        QComboBox::down-arrow {
+            image: none;
+            border-left: 5px solid transparent;
+            border-right: 5px solid transparent;
+            border-top: 5px solid #ffffff;
+            margin-right: 5px;
+        }
+        QPushButton {
+            background-color: #404040;
+            color: #ffffff;
+            border: 1px solid #555555;
+            padding: 5px 15px;
+            border-radius: 3px;
+        }
+        QPushButton:hover {
+            background-color: #505050;
+        }
+        QPushButton:pressed {
+            background-color: #353535;
+        }
+        QPushButton:disabled {
+            background-color: #2b2b2b;
+            color: #777777;
+        }
+        QTableWidget {
+            background-color: #3c3c3c;
+            color: #ffffff;
+            gridline-color: #555555;
+            alternate-background-color: #353535;
+        }
+        QHeaderView::section {
+            background-color: #404040;
+            color: #ffffff;
+            padding: 5px;
+            border: 1px solid #555555;
+        }
+        QCheckBox {
+            color: #ffffff;
+        }
+        QLabel {
+            color: #ffffff;
+        }
+        QMenuBar {
+            background-color: #2b2b2b;
+            color: #ffffff;
+        }
+        QMenuBar::item:selected {
+            background-color: #404040;
+        }
+        QMenu {
+            background-color: #3c3c3c;
+            color: #ffffff;
+        }
+        QMenu::item:selected {
+            background-color: #505050;
+        }
+        QGroupBox {
+            color: #ffffff;
+            border: 1px solid #555555;
+            margin-top: 10px;
+            padding-top: 10px;
+        }
+        QGroupBox::title {
+            subcontrol-origin: margin;
+            left: 10px;
+            padding: 0 5px;
+        }
+        QSplitter::handle {
+            background-color: #555555;
+        }
+        """
+        self.setStyleSheet(dark_stylesheet)
+        # Также применяем к приложению для дочерних окон
+        app = QApplication.instance()
+        if app:
+            app.setStyleSheet(dark_stylesheet)
+    
+    def apply_light_theme(self):
+        """Применить светлую тему."""
+        # Сбрасываем стили для светлой темы
+        self.setStyleSheet("")
+        app = QApplication.instance()
+        if app:
+            app.setStyleSheet("")
+            # Используем системную тему
+            app.setStyle('Fusion')
+    
+    def apply_font_size(self, size: int):
+        """Применить размер шрифта ко всем элементам интерфейса."""
+        try:
+            font = QFont("Arial", size)
+            
+            # Применяем шрифт к основным элементам
+            if hasattr(self, 'prompt_text') and self.prompt_text:
+                self.prompt_text.setFont(font)
+            if hasattr(self, 'results_table') and self.results_table:
+                self.results_table.setFont(font)
+                # Обновляем высоту строк таблицы для нового размера шрифта
+                self.results_table.verticalHeader().setDefaultSectionSize(int(size * 1.8))
+            if hasattr(self, 'saved_prompts_combo') and self.saved_prompts_combo:
+                self.saved_prompts_combo.setFont(font)
+            if hasattr(self, 'tags_input') and self.tags_input:
+                self.tags_input.setFont(font)
+            if hasattr(self, 'status_label') and self.status_label:
+                self.status_label.setFont(font)
+            
+            # Обновляем размер шрифта для всего приложения
+            app_font = QFont("Arial", size)
+            QApplication.setFont(app_font)
+            
+            # Также применяем к дочерним виджетам
+            for widget in self.findChildren(QWidget):
+                if isinstance(widget, (QTextEdit, QLineEdit, QComboBox, QLabel, QPushButton)):
+                    widget.setFont(font)
+        except Exception as e:
+            self.logger.error(f"Ошибка при применении размера шрифта: {str(e)}")
     
     def open_markdown_viewer(self, row: int):
         """Открыть ответ нейросети в форматированном Markdown."""
@@ -849,6 +1128,15 @@ def main():
     try:
         app = QApplication(sys.argv)
         app.setStyle('Fusion')  # Современный стиль интерфейса
+        
+        # Устанавливаем иконку для приложения (отображается в панели задач)
+        try:
+            app_icon = QIcon("app.ico")
+            if not app_icon.isNull():
+                app.setWindowIcon(app_icon)
+                logger.info("Иконка приложения установлена")
+        except Exception as e:
+            logger.warning(f"Не удалось установить иконку приложения: {str(e)}")
         
         window = MainWindow()
         window.show()

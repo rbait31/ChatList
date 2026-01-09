@@ -14,7 +14,7 @@ from PyQt5.QtWidgets import (
     QSplitter, QMenuBar, QMenu, QFileDialog, QDialog
 )
 from PyQt5.QtCore import Qt, QThread, pyqtSignal
-from PyQt5.QtGui import QFont
+from PyQt5.QtGui import QFont, QIcon
 
 from db import Database
 from models import ModelManager
@@ -56,6 +56,17 @@ class MainWindow(QMainWindow):
         self.logger = logging.getLogger(__name__)
         self.setWindowTitle("ChatList - Сравнение ответов нейросетей")
         self.setGeometry(100, 100, 1400, 900)
+        
+        # Устанавливаем иконку приложения
+        try:
+            icon = QIcon("app.ico")
+            if not icon.isNull():
+                self.setWindowIcon(icon)
+                self.logger.info("Иконка приложения загружена успешно")
+            else:
+                self.logger.warning("Не удалось загрузить иконку app.ico")
+        except Exception as e:
+            self.logger.warning(f"Ошибка при загрузке иконки: {str(e)}")
         
         try:
             # Инициализация БД и менеджера моделей
@@ -911,6 +922,15 @@ def main():
     try:
         app = QApplication(sys.argv)
         app.setStyle('Fusion')  # Современный стиль интерфейса
+        
+        # Устанавливаем иконку для приложения (отображается в панели задач)
+        try:
+            app_icon = QIcon("app.ico")
+            if not app_icon.isNull():
+                app.setWindowIcon(app_icon)
+                logger.info("Иконка приложения установлена")
+        except Exception as e:
+            logger.warning(f"Не удалось установить иконку приложения: {str(e)}")
         
         window = MainWindow()
         window.show()

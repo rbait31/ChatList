@@ -21,6 +21,8 @@ from models import ModelManager
 from model_settings_dialog import ModelSettingsDialog
 from view_results_dialog import ViewResultsDialog
 from prompts_dialog import PromptsDialog
+from prompt_improver import PromptImprover
+from prompt_improver_dialog import PromptImproverDialog
 
 
 class RequestThread(QThread):
@@ -59,6 +61,7 @@ class MainWindow(QMainWindow):
             # Инициализация БД и менеджера моделей
             self.db = Database()
             self.model_manager = ModelManager(self.db)
+            self.prompt_improver = PromptImprover(self.model_manager)
             self.logger.info("Инициализация приложения завершена успешно")
         except Exception as e:
             self.logger.error(f"Ошибка при инициализации: {str(e)}\n{traceback.format_exc()}")
@@ -145,11 +148,24 @@ class MainWindow(QMainWindow):
         
         prompt_layout.addLayout(prompt_controls)
         
+        # Кнопки управления промтом
+        prompt_buttons_layout = QHBoxLayout()
+        
+        # Кнопка улучшения промта
+        improve_button = QPushButton("✨ Улучшить промт")
+        improve_button.setMinimumHeight(35)
+        improve_button.clicked.connect(self.improve_prompt)
+        prompt_buttons_layout.addWidget(improve_button)
+        
+        prompt_buttons_layout.addStretch()
+        
         # Кнопка отправки
         send_button = QPushButton("Отправить запрос")
         send_button.setMinimumHeight(35)
         send_button.clicked.connect(self.send_prompt)
-        prompt_layout.addWidget(send_button)
+        prompt_buttons_layout.addWidget(send_button)
+        
+        prompt_layout.addLayout(prompt_buttons_layout)
         
         splitter.addWidget(prompt_panel)
         
@@ -253,6 +269,52 @@ class MainWindow(QMainWindow):
             if prompt:
                 self.prompt_text.setPlainText(prompt['prompt'])
                 self.tags_input.setText(prompt['tags'] or "")
+    
+    def improve_prompt(self):
+        """Открыть диалог улучшения промта."""
+        current_prompt = self.prompt_text.toPlainText().strip()
+        
+        if not current_prompt:
+            reply = QMessageBox.question(
+                self,
+                "Пустой промт",
+                "Поле промта пусто. Хотите создать новый промт с помощью AI-ассистента?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No
+            )
+            if reply == QMessageBox.No:
+                return
+            current_prompt = "Создай промт для..."  # Базовый промт для создания
+        
+        # Проверяем наличие активных моделей
+        active_models = self.model_manager.get_active_models()
+        if not active_models:
+            QMessageBox.warning(
+                self,
+                "Ошибка",
+                "Нет активных моделей для улучшения промта!\n"
+                "Добавьте модели через меню 'Настройки' → 'Управление моделями'."
+            )
+            return
+        
+        try:
+            dialog = PromptImproverDialog(self.prompt_improver, current_prompt, self)
+            if dialog.exec_() == QDialog.Accepted:
+                improved_prompt = dialog.get_selected_prompt()
+                if improved_prompt:
+                    self.prompt_text.setPlainText(improved_prompt)
+                    QMessageBox.information(
+                        self,
+                        "Успех",
+                        "Улучшенный промт подставлен в поле ввода!"
+                    )
+        except Exception as e:
+            self.logger.error(f"Ошибка при открытии диалога улучшения: {str(e)}")
+            QMessageBox.critical(
+                self,
+                "Ошибка",
+                f"Не удалось открыть диалог улучшения промта:\n{str(e)}"
+            )
     
     def send_prompt(self):
         """Отправить промт во все активные модели."""

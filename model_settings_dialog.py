@@ -9,11 +9,9 @@ from PyQt5.QtWidgets import (
     QCheckBox, QDialogButtonBox, QWidget
 )
 from PyQt5.QtCore import Qt
-from dotenv import load_dotenv
 from db import Database
-
-# Загружаем переменные окружения
-load_dotenv()
+# Импортируем config для автоматической загрузки .env из правильной папки
+import config  # noqa: F401
 
 
 class ModelSettingsDialog(QDialog):

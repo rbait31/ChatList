@@ -55,9 +55,8 @@ Name: "{userappdata}\Microsoft\Internet Explorer\Quick Launch\{#AppName}"; Filen
 Filename: "{app}\{#AppExeName}"; Description: "{cm:LaunchProgram,{#StringChange(AppName, '&', '&&')}}"; Flags: nowait postinstall skipifsilent
 
 [UninstallDelete]
-Type: filesandordirs; Name: "{app}\chatlist.db"
-Type: filesandordirs; Name: "{app}\chatlist.log"
-Type: filesandordirs; Name: "{app}\.env"
+; Файлы данных теперь хранятся в пользовательской папке %LOCALAPPDATA%\ChatList
+; Удаление этих файлов выполняется через кастомный код ниже
 Type: dirifempty; Name: "{app}"
 
 [Code]
@@ -66,7 +65,18 @@ begin
   // Кастомная логика при деинсталляции, если нужно
 end;
 
+function GetUserDataDir: String;
+var
+  AppDataPath: String;
+begin
+  // Получаем путь к LOCALAPPDATA (пользовательская папка данных)
+  AppDataPath := ExpandConstant('{localappdata}');
+  Result := AppDataPath + '\ChatList';
+end;
+
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+var
+  UserDataDir: String;
 begin
   case CurUninstallStep of
     usUninstall:
@@ -77,7 +87,17 @@ begin
     usPostUninstall:
       begin
         // Действия после завершения деинсталляции
-        // Можно показать сообщение или выполнить очистку
+        // Удаляем файлы данных из пользовательской папки
+        UserDataDir := GetUserDataDir;
+        if DirExists(UserDataDir) then
+        begin
+          // Удаляем файлы базы данных и логов
+          DeleteFile(UserDataDir + '\chatlist.db');
+          DeleteFile(UserDataDir + '\chatlist.log');
+          DeleteFile(UserDataDir + '\.env');
+          // Удаляем папку, если она пуста
+          RemoveDir(UserDataDir);
+        end;
       end;
   end;
 end;

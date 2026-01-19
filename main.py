@@ -25,6 +25,7 @@ from prompt_improver import PromptImprover
 from prompt_improver_dialog import PromptImproverDialog
 from settings_dialog import SettingsDialog
 from about_dialog import AboutDialog
+from version import __version__
 
 
 class RequestThread(QThread):
@@ -1141,7 +1142,7 @@ def main():
         window = MainWindow()
         window.show()
         
-        logger.info("Приложение ChatList запущено успешно")
+        logger.info(f"Приложение ChatList версии {__version__} запущено успешно")
         sys.exit(app.exec_())
     except Exception as e:
         error_msg = f"Критическая ошибка при запуске приложения: {str(e)}\n{traceback.format_exc()}"

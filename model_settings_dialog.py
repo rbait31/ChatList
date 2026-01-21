@@ -6,7 +6,7 @@ import os
 from PyQt5.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QPushButton, QTableWidget,
     QTableWidgetItem, QHeaderView, QMessageBox, QLineEdit, QLabel,
-    QCheckBox, QDialogButtonBox, QWidget
+    QCheckBox, QDialogButtonBox, QWidget, QTextEdit
 )
 from PyQt5.QtCore import Qt
 from db import Database
@@ -351,17 +351,70 @@ class ModelEditDialog(QDialog):
         # Автоматическая проверка модели перед сохранением
         api_key = os.getenv(api_id)
         if not api_key:
-            reply = QMessageBox.question(
-                self,
-                "Предупреждение",
-                f"API ключ для переменной '{api_id}' не найден в файле .env.\n\n"
-                f"Модель будет сохранена, но не сможет использоваться до добавления ключа.\n\n"
-                f"Продолжить сохранение?",
-                QMessageBox.Yes | QMessageBox.No,
-                QMessageBox.No
-            )
-            if reply == QMessageBox.No:
-                return
+            # Показываем диалог с возможностью ввода ключа
+            key_dialog = APIKeyInputDialog(self, api_id)
+            if key_dialog.exec_() == QDialog.Accepted:
+                # Пользователь ввел ключ и он был сохранен
+                # Перезагружаем переменные окружения
+                from config import load_env_file
+                load_env_file()
+                api_key = os.getenv(api_id)
+                # Если ключ все еще не найден (не должно произойти, но на всякий случай)
+                if not api_key:
+                    # Показываем диалог с возможностью ввода ключа еще раз
+                    key_dialog2 = APIKeyInputDialog(self, api_id)
+                    if key_dialog2.exec_() != QDialog.Accepted:
+                        return
+                    load_env_file()
+                    api_key = os.getenv(api_id)
+                    if not api_key:
+                        # Если все еще не найден, показываем диалог с возможностью ввода ключа
+                        key_dialog3 = APIKeyInputDialog(self, api_id)
+                        if key_dialog3.exec_() == QDialog.Accepted:
+                            from config import load_env_file
+                            load_env_file()
+                            api_key = os.getenv(api_id)
+                            if not api_key:
+                                # Если ключ все еще не найден после ввода, спрашиваем о продолжении
+                                reply = QMessageBox.question(
+                                    self,
+                                    "Предупреждение",
+                                    f"API ключ для переменной '{api_id}' не найден.\n\n"
+                                    f"Модель будет сохранена, но не сможет использоваться до добавления ключа.\n\n"
+                                    f"Продолжить сохранение?",
+                                    QMessageBox.Yes | QMessageBox.No,
+                                    QMessageBox.No
+                                )
+                                if reply == QMessageBox.No:
+                                    return
+                        else:
+                            # Пользователь отменил ввод ключа, спрашиваем о продолжении
+                            reply = QMessageBox.question(
+                                self,
+                                "Предупреждение",
+                                f"API ключ для переменной '{api_id}' не введен.\n\n"
+                                f"Модель будет сохранена, но не сможет использоваться до добавления ключа.\n\n"
+                                f"Продолжить сохранение?",
+                                QMessageBox.Yes | QMessageBox.No,
+                                QMessageBox.No
+                            )
+                            if reply == QMessageBox.No:
+                                return
+            else:
+                # Пользователь отменил ввод ключа - показываем диалог еще раз с предупреждением
+                # и возможностью продолжить без ключа
+                key_dialog2 = APIKeyInputDialog(self, api_id, allow_skip=True)
+                result = key_dialog2.exec_()
+                if result == QDialog.Accepted:
+                    # Пользователь ввел ключ
+                    from config import load_env_file
+                    load_env_file()
+                elif result == QDialog.Rejected and key_dialog2.skipped:
+                    # Пользователь выбрал "Продолжить без ключа"
+                    pass  # Продолжаем сохранение
+                else:
+                    # Пользователь отменил диалог - отменяем сохранение модели
+                    return
         else:
             # Проверяем, что ключ не заглушка
             placeholders = [
@@ -369,17 +422,43 @@ class ModelEditDialog(QDialog):
                 'your-api-key', 'api-key-here'
             ]
             if any(ph in api_key.lower() for ph in placeholders):
+                # Обнаружена заглушка - предлагаем ввести реальный ключ
                 reply = QMessageBox.question(
                     self,
-                    "Предупреждение",
-                    f"Обнаружена заглушка вместо реального API-ключа.\n\n"
-                    f"Модель будет сохранена, но не сможет использоваться до замены ключа.\n\n"
-                    f"Продолжить сохранение?",
+                    "Обнаружена заглушка",
+                    f"Обнаружена заглушка вместо реального API-ключа для переменной '{api_id}'.\n\n"
+                    f"Без реального ключа модель не сможет использоваться.\n\n"
+                    f"Хотите ввести реальный ключ сейчас?",
                     QMessageBox.Yes | QMessageBox.No,
-                    QMessageBox.No
+                    QMessageBox.Yes
                 )
-                if reply == QMessageBox.No:
-                    return
+                if reply == QMessageBox.Yes:
+                    # Пользователь хочет ввести ключ - показываем диалог
+                    key_dialog = APIKeyInputDialog(self, api_id)
+                    if key_dialog.exec_() == QDialog.Accepted:
+                        from config import load_env_file
+                        load_env_file()
+                        api_key = os.getenv(api_id)
+                        # Проверяем, что ключ больше не заглушка
+                        if api_key and any(ph in api_key.lower() for ph in placeholders):
+                            QMessageBox.warning(
+                                self,
+                                "Предупреждение",
+                                "Введенный ключ все еще похож на заглушку.\n\n"
+                                "Модель будет сохранена, но может не работать."
+                            )
+                else:
+                    # Пользователь отказался вводить ключ, спрашиваем о продолжении
+                    reply2 = QMessageBox.question(
+                        self,
+                        "Предупреждение",
+                        f"Модель будет сохранена, но не сможет использоваться до замены ключа.\n\n"
+                        f"Продолжить сохранение?",
+                        QMessageBox.Yes | QMessageBox.No,
+                        QMessageBox.No
+                    )
+                    if reply2 == QMessageBox.No:
+                        return
         
         self.accept()
     
@@ -395,4 +474,144 @@ class ModelEditDialog(QDialog):
             self.url_input.text().strip(),
             self.api_id_input.text().strip()
         )
+
+
+class APIKeyInputDialog(QDialog):
+    """Диалог для ввода API ключа."""
+    
+    def __init__(self, parent=None, api_key_env: str = "", allow_skip: bool = False):
+        """
+        Инициализация диалога.
+        
+        Args:
+            parent: Родительское окно
+            api_key_env: Имя переменной окружения для API ключа
+            allow_skip: Разрешить продолжить без ключа
+        """
+        super().__init__(parent)
+        self.api_key_env = api_key_env
+        self.allow_skip = allow_skip
+        self.skipped = False
+        self.setWindowTitle("Ввод API ключа")
+        self.setMinimumWidth(500)
+        
+        layout = QVBoxLayout()
+        self.setLayout(layout)
+        
+        # Информационное сообщение
+        if self.allow_skip:
+            info_text = (
+                f"<b>API ключ не найден</b><br><br>"
+                f"API ключ для переменной <b>'{api_key_env}'</b> не найден в файле .env.<br><br>"
+                f"Введите ваш API ключ в поле ниже. Он будет автоматически сохранен в файл .env.<br><br>"
+                f"<i>Модель будет сохранена, но не сможет использоваться до добавления ключа.</i>"
+            )
+        else:
+            info_text = (
+                f"<b>API ключ не найден</b><br><br>"
+                f"API ключ для переменной <b>'{api_key_env}'</b> не найден в файле .env.<br><br>"
+                f"Введите ваш API ключ в поле ниже. Он будет автоматически сохранен в файл .env."
+            )
+        info_label = QLabel(info_text)
+        info_label.setWordWrap(True)
+        layout.addWidget(info_label)
+        
+        # Поле ввода API ключа
+        key_label = QLabel(f"API ключ ({api_key_env}):")
+        layout.addWidget(key_label)
+        
+        self.key_input = QLineEdit()
+        self.key_input.setPlaceholderText("Введите ваш API ключ здесь...")
+        self.key_input.setEchoMode(QLineEdit.Password)  # Скрываем ввод для безопасности
+        layout.addWidget(self.key_input)
+        
+        # Чекбокс для показа/скрытия ключа
+        show_key_checkbox = QCheckBox("Показать ключ")
+        show_key_checkbox.toggled.connect(
+            lambda checked: self.key_input.setEchoMode(QLineEdit.Normal if checked else QLineEdit.Password)
+        )
+        layout.addWidget(show_key_checkbox)
+        
+        # Информация о расположении файла
+        from config import get_app_data_dir
+        env_path = get_app_data_dir() / ".env"
+        path_label = QLabel(f"Файл будет сохранен в:\n{env_path}")
+        path_label.setWordWrap(True)
+        path_label.setStyleSheet("color: gray; font-size: 9pt;")
+        layout.addWidget(path_label)
+        
+        layout.addSpacing(10)
+        
+        # Кнопки
+        if self.allow_skip:
+            button_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel | QDialogButtonBox.Ignore)
+            button_box.button(QDialogButtonBox.Ignore).setText("Продолжить без ключа")
+            button_box.button(QDialogButtonBox.Ignore).clicked.connect(self.skip_and_accept)
+        else:
+            button_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        button_box.accepted.connect(self.save_and_accept)
+        button_box.rejected.connect(self.reject)
+        layout.addWidget(button_box)
+    
+    def save_and_accept(self):
+        """Сохранить ключ в .env файл и принять диалог."""
+        api_key = self.key_input.text().strip()
+        
+        if not api_key:
+            QMessageBox.warning(self, "Ошибка", "Введите API ключ!")
+            return
+        
+        try:
+            from config import get_app_data_dir
+            env_path = get_app_data_dir() / ".env"
+            
+            # Читаем существующий .env файл, если он есть
+            env_lines = []
+            if env_path.exists():
+                with open(env_path, 'r', encoding='utf-8') as f:
+                    env_lines = f.readlines()
+            
+            # Ищем строку с нужной переменной
+            found = False
+            for i, line in enumerate(env_lines):
+                if line.strip().startswith(f"{self.api_key_env}="):
+                    # Обновляем существующую строку
+                    env_lines[i] = f"{self.api_key_env}={api_key}\n"
+                    found = True
+                    break
+            
+            # Если переменная не найдена, добавляем новую строку
+            if not found:
+                env_lines.append(f"{self.api_key_env}={api_key}\n")
+            
+            # Записываем обновленный .env файл
+            with open(env_path, 'w', encoding='utf-8') as f:
+                f.writelines(env_lines)
+            
+            # Перезагружаем переменные окружения через config
+            from config import load_env_file
+            load_env_file()
+            
+            QMessageBox.information(
+                self,
+                "Успех",
+                f"API ключ успешно сохранен в файл .env!\n\n"
+                f"Файл: {env_path}\n\n"
+                f"Переменная '{self.api_key_env}' теперь доступна."
+            )
+            
+            self.accept()
+        except Exception as e:
+            QMessageBox.critical(
+                self,
+                "Ошибка",
+                f"Не удалось сохранить API ключ в файл .env!\n\n"
+                f"Ошибка: {str(e)}\n\n"
+                f"Проверьте права доступа к папке данных приложения."
+            )
+    
+    def skip_and_accept(self):
+        """Пропустить ввод ключа и продолжить."""
+        self.skipped = True
+        self.accept()
 

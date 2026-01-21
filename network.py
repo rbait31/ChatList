@@ -6,10 +6,8 @@ import os
 import requests
 from typing import Optional
 from abc import ABC, abstractmethod
-from dotenv import load_dotenv
-
-# Загружаем переменные окружения
-load_dotenv()
+# Импортируем config для автоматической загрузки .env из правильной папки
+import config  # noqa: F401
 
 
 class APIClient(ABC):

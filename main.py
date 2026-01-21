@@ -25,6 +25,8 @@ from prompt_improver import PromptImprover
 from prompt_improver_dialog import PromptImproverDialog
 from settings_dialog import SettingsDialog
 from about_dialog import AboutDialog
+from version import __version__
+from config import get_app_data_dir, load_env_file
 
 
 class RequestThread(QThread):
@@ -72,7 +74,10 @@ class MainWindow(QMainWindow):
         
         try:
             # Инициализация БД и менеджера моделей
-            self.db = Database()
+            # Используем пользовательскую папку для БД
+            app_data_dir = get_app_data_dir()
+            db_path = str(app_data_dir / "chatlist.db")
+            self.db = Database(db_path)
             self.model_manager = ModelManager(self.db)
             self.prompt_improver = PromptImprover(self.model_manager)
             self.logger.info("Инициализация приложения завершена успешно")
@@ -82,7 +87,7 @@ class MainWindow(QMainWindow):
                 None,
                 "Ошибка инициализации",
                 f"Не удалось инициализировать приложение:\n{str(e)}\n\n"
-                f"Проверьте файл chatlist.log для подробностей."
+                f"Проверьте файл лога для подробностей."
             )
             raise
         
@@ -1114,12 +1119,17 @@ class MainWindow(QMainWindow):
 
 def main():
     """Главная функция приложения."""
+    # Переменные окружения загружаются автоматически при импорте config
+    # Получаем путь к папке данных приложения
+    app_data_dir = get_app_data_dir()
+    log_path = str(app_data_dir / "chatlist.log")
+    
     # Настройка логирования
     logging.basicConfig(
         level=logging.INFO,
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
         handlers=[
-            logging.FileHandler('chatlist.log', encoding='utf-8'),
+            logging.FileHandler(log_path, encoding='utf-8'),
             logging.StreamHandler(sys.stdout)
         ]
     )
@@ -1141,7 +1151,7 @@ def main():
         window = MainWindow()
         window.show()
         
-        logger.info("Приложение ChatList запущено успешно")
+        logger.info(f"Приложение ChatList версии {__version__} запущено успешно")
         sys.exit(app.exec_())
     except Exception as e:
         error_msg = f"Критическая ошибка при запуске приложения: {str(e)}\n{traceback.format_exc()}"

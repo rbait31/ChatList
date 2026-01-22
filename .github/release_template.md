@@ -63,3 +63,4 @@
 
 **Скачать:** [ChatList-Setup-{VERSION}.exe](https://github.com/rbait31/ChatList/releases/download/v{VERSION}/ChatList-Setup-{VERSION}.exe)
 
+

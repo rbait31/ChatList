@@ -4,12 +4,13 @@
 """
 import sqlite3
 import os
+import threading
 from datetime import datetime
 from typing import List, Dict, Optional, Tuple
 
 
 class Database:
-    """Класс для работы с базой данных SQLite."""
+    """Класс для работы с базой данных SQLite (thread-safe)."""
     
     def __init__(self, db_path: str = "chatlist.db"):
         """
@@ -19,15 +20,20 @@ class Database:
             db_path: Путь к файлу базы данных
         """
         self.db_path = db_path
-        self.conn = None
+        self._local = threading.local()  # Локальное хранилище для каждого потока
         self.init_db()
     
     def get_connection(self):
-        """Получить соединение с БД."""
-        if self.conn is None:
-            self.conn = sqlite3.connect(self.db_path)
-            self.conn.row_factory = sqlite3.Row
-        return self.conn
+        """
+        Получить соединение с БД (thread-safe).
+        Создает отдельное соединение для каждого потока.
+        """
+        if not hasattr(self._local, 'conn') or self._local.conn is None:
+            self._local.conn = sqlite3.connect(self.db_path, check_same_thread=False)
+            self._local.conn.row_factory = sqlite3.Row
+            # Включаем проверку внешних ключей
+            self._local.conn.execute("PRAGMA foreign_keys = ON")
+        return self._local.conn
     
     def init_db(self):
         """Инициализация БД и создание таблиц."""
@@ -510,8 +516,13 @@ class Database:
         return True
     
     def close(self):
-        """Закрыть соединение с БД."""
-        if self.conn:
-            self.conn.close()
-            self.conn = None
+        """Закрыть соединение с БД (для текущего потока)."""
+        if hasattr(self._local, 'conn') and self._local.conn:
+            self._local.conn.close()
+            self._local.conn = None
+    
+    def close_all(self):
+        """Закрыть все соединения (для всех потоков)."""
+        # Закрываем соединение в текущем потоке
+        self.close()
 

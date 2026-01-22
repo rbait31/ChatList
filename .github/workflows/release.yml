@@ -1,0 +1,88 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - 'v*'  # Запускается при создании тега вида v1.0.1
+  workflow_dispatch:  # Позволяет запускать вручную
+
+jobs:
+  build:
+    runs-on: windows-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+    
+    - name: Get version
+      id: get_version
+      run: |
+        $version = python -c "from version import __version__; print(__version__)"
+        echo "VERSION=$version" >> $env:GITHUB_OUTPUT
+        echo "Version: $version"
+    
+    - name: Build executable
+      run: |
+        $version = "${{ steps.get_version.outputs.VERSION }}"
+        $appName = "ChatList-$version"
+        pyinstaller --onefile --windowed --name $appName main.py
+    
+    - name: Create installer (if Inno Setup available)
+      continue-on-error: true
+      run: |
+        $version = "${{ steps.get_version.outputs.VERSION }}"
+        $appName = "ChatList-$version"
+        
+        # Проверяем наличие Inno Setup
+        $innoPath = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+        if (Test-Path $innoPath) {
+          # Обновляем setup.iss с версией
+          $setupContent = Get-Content setup.iss -Raw -Encoding UTF8
+          $setupContent = $setupContent -replace '#define AppVersion ".*"', "#define AppVersion `"$version`""
+          $setupContent = $setupContent -replace 'OutputBaseFilename=ChatList-Setup-.*', "OutputBaseFilename=ChatList-Setup-$version"
+          $setupContent = $setupContent -replace 'Source: "dist\\ChatList-\{.*\}.exe"', "Source: `"dist\$appName.exe`""
+          
+          $tempSetupIss = "setup_temp.iss"
+          $setupContent | Out-File -FilePath $tempSetupIss -Encoding UTF8
+          
+          & $innoPath $tempSetupIss
+          
+          if (Test-Path $tempSetupIss) {
+            Remove-Item $tempSetupIss
+          }
+        } else {
+          Write-Host "Inno Setup not found, skipping installer creation"
+        }
+    
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v3
+      with:
+        name: release-files
+        path: |
+          dist/ChatList-*.exe
+          installer/ChatList-Setup-*.exe
+        retention-days: 30
+    
+    - name: Create Release
+      if: startsWith(github.ref, 'refs/tags/')
+      uses: softprops/action-gh-release@v1
+      with:
+        files: |
+          dist/ChatList-*.exe
+          installer/ChatList-Setup-*.exe
+        draft: false
+        prerelease: false
+        generate_release_notes: true
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
